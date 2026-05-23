@@ -1,5 +1,21 @@
 require "set"
 
+# Trifecta / 3連単の買い目をここに書く。
+#
+# 形式：
+#   1着-2着-3着
+#
+# 例：
+#   3-10-12
+#
+# これは、
+#   1着: 3
+#   2着: 10
+#   3着: 12
+# を意味する。
+#
+# Trifecta / 3連単では順序が重要なので、
+# 3-10-12 と 12-10-3 は別の買い目として扱う。
 BET_TEXT = <<~TEXT
 3-10-12
 3-10-18
@@ -25,10 +41,13 @@ TEXT
 # ------------------------------------------------------------
 # 買い目を読み込む
 #
-# 三連複では 3-10-12 と 12-3-10 は同じ買い目なので、
-# 各買い目は必ずソートして [3, 10, 12] の形で保存する。
+# Trifecta / 3連単では順序が重要なので、ソートしない。
 #
-# Set を使うことで、重複した買い目があっても自動的に1つにまとまる。
+# 例：
+#   3-10-12 は [3, 10, 12]
+#   12-10-3 は [12, 10, 3]
+#
+# として、別々の買い目として扱う。
 # ------------------------------------------------------------
 def parse_bets(text)
   bets = Set.new
@@ -37,7 +56,7 @@ def parse_bets(text)
     line = line.strip
     next if line.empty?
 
-    nums = line.split("-").map(&:to_i).sort
+    nums = line.split("-").map(&:to_i)
 
     raise "3頭ではありません: #{line}" unless nums.length == 3
     raise "同じ馬番が重複しています: #{line}" unless nums.uniq.length == 3
@@ -51,16 +70,9 @@ end
 # ------------------------------------------------------------
 # bit mask を馬番リストに変換する
 #
-# 例：
-# horses = [3, 8, 10, 12, 13, 16, 18]
-#
 # mask の各 bit が「その馬を列に入れるかどうか」を表す。
-#
-# たとえば mask = 0b0001011 なら、
-# 0番目, 1番目, 3番目の馬を選ぶので、
-# [3, 8, 12] になる。
-#
-# これにより、馬番集合のすべての部分集合を列候補として列挙できる。
+# これにより、馬番集合のすべての部分集合を
+# 1着列・2着列・3着列の候補として列挙できる。
 # ------------------------------------------------------------
 def bits_to_list(mask, horses)
   horses.each_with_index
@@ -69,135 +81,61 @@ def bits_to_list(mask, horses)
 end
 
 # ------------------------------------------------------------
-# 3つの列から三連複の買い目を生成する
+# 3つの列から Trifecta / 3連単の買い目を生成する
 #
-# 三連複フォーメーションは、
+# 1着候補・2着候補・3着候補から1頭ずつ選び、
+# 順序つきの3頭の組を作る。
 #
-#   1列目 - 2列目 - 3列目
+# 同じ馬を2回以上選ぶことはできないので、重複馬番は除外する。
 #
-# から1頭ずつ選んで3頭の組を作る。
-#
-# ただし、同じ馬を2回以上選ぶことはできないので、
-# [12, 12, 18] のような組み合わせは除外する。
-#
-# また、三連複は順序を問わないため、
-# [12, 10, 3] は [3, 10, 12] にソートして保存する。
+# Trifecta / 3連単は順序を保持するため、ソートしない。
 # ------------------------------------------------------------
-def generated_trios(col1, col2, col3)
+def generated_triples(first_col, second_col, third_col)
   result = Set.new
 
-  col1.product(col2, col3) do |a, b, c|
-    # 同じ馬が重複していたら無効
+  first_col.product(second_col, third_col) do |a, b, c|
     next unless [a, b, c].uniq.length == 3
-
-    # 三連複なので順序を無視するためにソートする
-    result.add([a, b, c].sort)
+    result.add([a, b, c])
   end
 
   result
 end
 
 # ------------------------------------------------------------
-# 買い目集合と完全一致するフォーメーションを探す
+# 買い目集合と完全一致する Trifecta / 3連単フォーメーションを探す
 #
-# アルゴリズムの考え方：
+# アルゴリズム：
 #
-# 1. 元の買い目に登場する馬番をすべて集める
+# 1. 元の買い目に登場する馬番をすべて集める。
+# 2. その馬番集合の空でない部分集合をすべて作る。
+# 3. それぞれを1着列・2着列・3着列の候補として試す。
+# 4. 各フォーメーションから生成される Trifecta / 3連単の集合を作る。
+# 5. 元の買い目集合と完全一致するものだけを解として採用する。
+# 6. 合計マーク数が少ない順に並べる。
 #
-#    例：
-#    [3, 8, 10, 12, 13, 16, 18]
-#
-# 2. その馬番集合の「空でない部分集合」をすべて作る
-#
-#    たとえば、
-#    [3]
-#    [8]
-#    [3, 8]
-#    [10, 12, 18]
-#    ...
-#
-#    これらが、フォーメーションの各列の候補になる。
-#
-# 3. すべての列候補の組み合わせ
-#
-#    col1, col2, col3
-#
-#    を試す。
-#
-# 4. そのフォーメーションから生成される三連複の集合を作る。
-#
-# 5. 生成された集合が、元の買い目集合と完全一致すれば、
-#    そのフォーメーションは解である。
-#
-# 6. 最後に、マーク数が少ない順に並べる。
-#
-# 注意：
-# 三連複フォーメーションでは列の順番を入れ替えても
-# 生成される買い目は同じになる。
-#
-# たとえば、
-#
-#   A - B - C
-#   C - A - B
-#
-# は同じ買い目集合を生成する。
-#
-# そのため、探索時に
-#
-#   m1 <= m2 <= m3
-#
-# という制約を入れて、同じ解の列順違いを減らしている。
+# Trio / 三連複と違い、Trifecta / 3連単では列順そのものに意味がある。
+# そのため、列順を省略せず、すべての順序つき列候補を探索する。
 # ------------------------------------------------------------
 def find_formations(target, top_k: 20)
-  # 元の買い目に登場する馬番をすべて集める
   horses = target.to_a.flatten.uniq.sort
   n = horses.length
-
-  # 空でない部分集合を bit mask で表す
-  #
-  # n頭いる場合、部分集合は 2^n 個ある。
-  # ただし空集合は列として使えないので除外する。
-  #
-  # 例：
-  # n = 7 なら、1 から 127 までの mask を使う。
   masks = (1...(1 << n)).to_a
-
   solutions = []
 
   masks.each do |m1|
     masks.each do |m2|
-      # 列の順番違いを減らすための制約
-      next if m2 < m1
-
       masks.each do |m3|
-        # 同じく列順違いを減らす
-        next if m3 < m2
+        first_col = bits_to_list(m1, horses)
+        second_col = bits_to_list(m2, horses)
+        third_col = bits_to_list(m3, horses)
 
-        col1 = bits_to_list(m1, horses)
-        col2 = bits_to_list(m2, horses)
-        col3 = bits_to_list(m3, horses)
+        made = generated_triples(first_col, second_col, third_col)
 
-        # このフォーメーションから生成される三連複を作る
-        made = generated_trios(col1, col2, col3)
-
-        # 元の買い目集合と完全一致したら解として保存する
-        if made == target
-          solutions << [col1, col2, col3]
-        end
+        solutions << [first_col, second_col, third_col] if made == target
       end
     end
   end
 
-  # 解を見やすい順に並べる
-  #
-  # 優先順位：
-  # 1. 合計マーク数が少ない
-  # 2. 最大列サイズが小さい
-  # 3. 列サイズの並びが小さい
-  # 4. 馬番順
-  #
-  # これにより、冗長なフォーメーションよりも
-  # すっきりしたフォーメーションが上に来る。
   solutions.sort_by do |cols|
     [
       cols.map(&:length).sum,
@@ -208,38 +146,35 @@ def find_formations(target, top_k: 20)
   end.first(top_k)
 end
 
-# ------------------------------------------------------------
-# フォーメーションを表示用文字列に変換する
-#
-# [[12, 18], [10, 12, 16], [3, 8, 10, 12, 13]]
-#
-# を
-#
-# 12,18 - 10,12,16 - 3,8,10,12,13
-#
-# のように表示する。
-# ------------------------------------------------------------
 def format_formation(cols)
-  cols.map { |col| col.join(",") }.join(" - ")
+  labels = ["1着", "2着", "3着"]
+
+  cols.each_with_index.map do |col, i|
+    "#{labels[i]}: #{col.join(",")}"
+  end.join(" / ")
 end
 
-# ------------------------------------------------------------
-# メイン処理
-# ------------------------------------------------------------
-
 target = parse_bets(BET_TEXT)
-
 solutions = find_formations(target)
 
 puts "元の買い目数: #{target.length}点"
 puts
 
-solutions.each_with_index do |cols, i|
-  generated = generated_trios(*cols)
-  marks = cols.map(&:length).sum
-
-  puts "[#{i + 1}] #{format_formation(cols)}"
-  puts "    マーク数: #{marks}"
-  puts "    生成点数: #{generated.length}点"
+if solutions.empty?
+  puts "完全一致する Trifecta / 3連単フォーメーションは見つかりませんでした。"
   puts
+  puts "この場合、以下の可能性があります。"
+  puts "- 買い目がフォーメーションではなく個別指定である"
+  puts "- 入力の一部が抜けている"
+  puts "- 入力に余分な買い目が入っている"
+else
+  solutions.each_with_index do |cols, i|
+    generated = generated_triples(*cols)
+    marks = cols.map(&:length).sum
+
+    puts "[#{i + 1}] #{format_formation(cols)}"
+    puts "    マーク数: #{marks}"
+    puts "    生成点数: #{generated.length}点"
+    puts
+  end
 end
